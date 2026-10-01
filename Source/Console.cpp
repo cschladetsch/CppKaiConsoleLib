@@ -26,7 +26,9 @@
 #include "KAI/Core/Memory/StandardAllocator.h"
 #include "KAI/Core/Object.h"
 #include "KAI/Executor/BinBase.h"
+#ifdef KAI_USE_ENET
 #include "KAI/Network/Serialization.h"
+#endif
 #include "rang.hpp"
 
 using namespace std;

@@ -4,7 +4,8 @@
 #include <KAI/Core/Tree.h>
 #include <KAI/Executor/Compiler.h>
 #include <KAI/Executor/Executor.h>
-#include <KAI/Language.h>
+#include <KAI/Language/Pi/Pi.h>
+#include <KAI/Language/Rho/Rho.h>
 #include <KAI/Language/Common/TranslatorCommon.h>
 #include <KAI/Network/Transport.h>
 
