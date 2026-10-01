@@ -10,6 +10,7 @@
 #include <KAI/Network/Transport.h>
 
 #include <functional>
+#include <map>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -78,6 +79,15 @@ class Console : public Reflected {
     Language GetLanguage() const;
 
     void SetTranslator(std::shared_ptr<TranslatorCommon> trans);
+
+    /// Use `translator` for `lang`, alongside the built-in Pi and Rho.
+    /// The console command named after the language in lower case (for
+    /// example `sigma`) switches to it. With `indentedBlocks`, interactive
+    /// input that opens a block (fun/if/while/for/do) continues until an
+    /// empty line, as in Python's REPL. `prompt` is the symbol shown after
+    /// the language name (the built-in languages use λ).
+    void AddTranslator(Language lang, std::shared_ptr<TranslatorCommon> translator,
+                       bool indentedBlocks = false, std::string prompt = "λ");
     std::shared_ptr<TranslatorCommon> GetTranslator() const {
         return translator_;
     }
@@ -209,6 +219,16 @@ class Console : public Reflected {
    private:
     bool end_ = false;
     int endCode_ = 0;
+
+    struct AddedTranslator {
+        std::shared_ptr<TranslatorCommon> translator;
+        bool indentedBlocks = false;
+        std::string prompt;
+    };
+    std::map<Language, AddedTranslator> addedTranslators_;
+
+    /// The added language whose lower-case name is `name`, if any.
+    bool FindAddedLanguage(const std::string &name, Language &lang) const;
 };
 
 KAI_TYPE_TRAITS(Console, Number::Console, Properties::Reflected);

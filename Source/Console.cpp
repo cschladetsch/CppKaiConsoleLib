@@ -35,21 +35,29 @@ using namespace std;
 
 KAI_BEGIN
 
-// Translator that dispatches to Pi or Rho based on the compiler's active language.
+// Translator that dispatches to Pi, Rho, or a translator added with
+// Console::AddTranslator, based on the compiler's active language.
 class MultiLangTranslator : public TranslatorCommon {
+   public:
+    using Lookup = std::function<shared_ptr<TranslatorCommon>(Language)>;
+
+   private:
     shared_ptr<PiTranslator> pi_;
     shared_ptr<RhoTranslator> rho_;
     Pointer<Compiler> compiler_;
+    Lookup added_;
 
    public:
     MultiLangTranslator(Registry &reg,
                         shared_ptr<PiTranslator> pi,
                         shared_ptr<RhoTranslator> rho,
-                        Pointer<Compiler> comp)
+                        Pointer<Compiler> comp,
+                        Lookup added = nullptr)
         : TranslatorCommon(reg),
           pi_(std::move(pi)),
           rho_(std::move(rho)),
-          compiler_(comp) {}
+          compiler_(comp),
+          added_(std::move(added)) {}
 
     Pointer<Continuation> Translate(const char *text,
                                     Structure st) override {
@@ -73,8 +81,21 @@ class MultiLangTranslator : public TranslatorCommon {
                 }
                 return result;
             }
-            default:
-                return Object();
+            default: {
+                const auto lang = static_cast<Language>(compiler_->GetLanguage());
+                auto added = added_ ? added_(lang) : nullptr;
+                if (!added) return Object();
+                added->trace = compiler_->GetTraceLevel();
+                auto result = added->Translate(text, st);
+                if (added->failed) {
+                    // Added languages report their own errors (e.g. type
+                    // errors) for the user, not just the trace log.
+                    std::cerr << added->error;
+                    if (!added->error.empty() && added->error.back() != '\n') std::cerr << '\n';
+                    return Object();
+                }
+                return result;
+            }
         }
     }
 };
@@ -158,8 +179,30 @@ void Console::SetLanguage(Language lang) {
             *reg_,
             std::make_shared<PiTranslator>(*reg_),
             std::make_shared<RhoTranslator>(*reg_),
-            compiler_));
+            compiler_,
+            [this](Language l) -> shared_ptr<TranslatorCommon> {
+                auto found = addedTranslators_.find(l);
+                return found == addedTranslators_.end() ? nullptr : found->second.translator;
+            }));
     }
+}
+
+void Console::AddTranslator(Language lang, std::shared_ptr<TranslatorCommon> translator,
+                            bool indentedBlocks, std::string prompt) {
+    addedTranslators_[lang] = AddedTranslator{std::move(translator), indentedBlocks, std::move(prompt)};
+}
+
+bool Console::FindAddedLanguage(const std::string &name, Language &lang) const {
+    for (auto const &[candidate, added] : addedTranslators_) {
+        std::string lower = ToString(candidate);
+        std::transform(lower.begin(), lower.end(), lower.begin(),
+                       [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+        if (lower == name) {
+            lang = candidate;
+            return true;
+        }
+    }
+    return false;
 }
 
 void Console::SetLanguage(int lang) {
@@ -1234,10 +1277,13 @@ void Console::WritePrompt(ostream &out) const {
             << rang::fg::yellow << " λ " << rang::fg::reset
             << rang::style::bold;
     } else {
-        // Normal Pi/Rho prompt
-        out << rang::style::bold << rang::fg::cyan
-            << ToString(static_cast<Language>(compiler_->GetLanguage()))
-            << rang::fg::yellow << " λ " << rang::fg::reset
+        // Language prompt: λ, or the symbol an added language chose
+        const auto lang = static_cast<Language>(compiler_->GetLanguage());
+        const auto added = addedTranslators_.find(lang);
+        const std::string symbol =
+            added != addedTranslators_.end() && !added->second.prompt.empty() ? added->second.prompt : "λ";
+        out << rang::style::bold << rang::fg::cyan << ToString(lang)
+            << rang::fg::yellow << " " << symbol << " " << rang::fg::reset
             << rang::style::bold;
     }
     out.flush();  // Ensure prompt is displayed immediately
@@ -1502,6 +1548,9 @@ int Console::Run() {
                         // Note: The main application should handle translator
                         // switching For now, just set the language
                         continue;
+                    } else if (Language added; FindAddedLanguage(text, added)) {
+                        SetLanguage(added);
+                        continue;
                     }
 
                     // Check for network commands
@@ -1666,6 +1715,39 @@ bool Console::IsStructureIncomplete(const String &text) const {
         return braceCount > 0;
     }
 
+    // Added languages with indentation-based blocks: an input that opens a
+    // block (fun, if, while, for, do) continues until an empty line, as in
+    // Python's REPL. Unclosed brackets also continue.
+    auto added = addedTranslators_.find(language_);
+    if (added != addedTranslators_.end() && added->second.indentedBlocks) {
+        const std::string str = text.StdString();
+        int depth = 0;
+        char quote = '\0';
+        for (char c : str) {
+            if (quote) {
+                if (c == quote) quote = '\0';
+            } else if (c == '"' || c == '\'') {
+                quote = c;
+            } else if (c == '(' || c == '[' || c == '{') {
+                ++depth;
+            } else if (c == ')' || c == ']' || c == '}') {
+                --depth;
+            }
+        }
+        if (depth > 0) return true;
+
+        const size_t start = str.find_first_not_of(" \t");
+        const size_t end = str.find_first_of(" \t(\n", start);
+        const std::string first = start == std::string::npos ? "" : str.substr(start, end - start);
+        const bool opensBlock =
+            first == "fun" || first == "if" || first == "while" || first == "for" || first == "do";
+        const size_t lastBreak = str.find_last_of('\n');
+        const bool endsWithEmptyLine =
+            lastBreak != std::string::npos &&
+            str.find_first_not_of(" \t\r", lastBreak + 1) == std::string::npos;
+        return opensBlock && !endsWithEmptyLine;
+    }
+
     // For other languages, we don't have multi-line structures
     return false;
 }
@@ -1806,6 +1888,13 @@ bool Console::ProcessBuiltinCommand(const std::string &command) {
         SetLanguage(Language::Rho);
         cout << rang::fg::green << "Switched to Rho language mode"
              << rang::fg::reset << "\n";
+        return true;
+    }
+
+    if (Language added; FindAddedLanguage(cmd, added)) {
+        SetLanguage(added);
+        cout << rang::fg::green << "Switched to " << ToString(added)
+             << " language mode" << rang::fg::reset << "\n";
         return true;
     }
 
