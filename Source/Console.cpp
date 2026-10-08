@@ -414,6 +414,11 @@ void Console::CreateTree() {
     Bin::AddFunctions(bin);
     std::function<void(Object, Object)> sendBinaryFn =
         [this](Object payloadObj, Object peerSpec) {
+        // Checks the app registered (PiNet, in the Console app) run first,
+        // so a payload that can't travel is refused whether or not the
+        // network is up.
+        for (auto const &check : sendChecks_) check(payloadObj);
+
         if (!networkingEnabled_) {
             KAI_THROW_1(Base, "Network not enabled. Use '/network start' first.");
         }

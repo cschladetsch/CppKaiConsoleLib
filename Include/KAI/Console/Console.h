@@ -88,6 +88,13 @@ class Console : public Reflected {
     /// the language name (the built-in languages use λ).
     void AddTranslator(Language lang, std::shared_ptr<TranslatorCommon> translator,
                        bool indentedBlocks = false, std::string prompt = "λ");
+
+    /// Run `check` on every payload before `send` does anything else. A
+    /// check throws to refuse the send. This is how the app adds PiNet
+    /// without ConsoleLib depending on it.
+    using SendCheck = std::function<void(Object)>;
+    void AddSendCheck(SendCheck check) { sendChecks_.push_back(std::move(check)); }
+
     std::shared_ptr<TranslatorCommon> GetTranslator() const {
         return translator_;
     }
@@ -225,6 +232,7 @@ class Console : public Reflected {
         bool indentedBlocks = false;
         std::string prompt;
     };
+    std::vector<SendCheck> sendChecks_;
     std::map<Language, AddedTranslator> addedTranslators_;
 
     /// The added language whose lower-case name is `name`, if any.
